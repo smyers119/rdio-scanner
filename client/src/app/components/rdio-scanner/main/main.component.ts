@@ -60,7 +60,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
     callTag = 'Tag';
     callTalkgroup = 'Talkgroup';
     callTalkgroupId = '0';
-    callTalkgroupName = `Rdio Scanner ${packageInfo.name === 'rdio-scanner' ? 'v'.concat(packageInfo.version) : ''}`;
+    callTalkgroupName = `ScanCapeMaynj.live`;
     callTime = 0;
     callUnit = '0';
 
