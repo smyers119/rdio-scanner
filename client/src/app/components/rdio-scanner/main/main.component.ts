@@ -61,20 +61,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
     callTag = 'Tag';
     callTalkgroup = 'Talkgroup';
     callTalkgroupId = '0';
-    /*
-        * BEGIN OF RED TAPE:
-        * 
-        * By modifying, deleting or disabling the following lines, you harm
-        * the open source project and its author.  Rdio Scanner represents a lot of
-        * investment in time, support, testing and hardware.
-        * 
-        * Be respectful, sponsor the project if you can, use native apps when possible.
-        * 
-        */
-    callTalkgroupName = `Rdio Scanner v${packageInfo.version}`;
-    /**
-     * END OF RED TAPE.
-     */
+    callTalkgroupName = `ScanCapeMaynj.live`;
     callTime = 0;
     callUnit = '0';
 

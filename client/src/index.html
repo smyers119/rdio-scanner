@@ -8,14 +8,31 @@
     <link rel="manifest" href="manifest.webmanifest">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>Rdio Scanner</title>
+    <title>Scan Cape May County</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="translucent">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="theme-color" content="#1e1e1e">
 </head>
 
+<style>
+    div.alerts {
+    height: 5em;
+    position: relative;
+    background: rgb(30,30,30);  }
+div.alerts p {
+    margin: 0;
+    background: yellow;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    margin-right: -50%;
+    transform: translate(-50%, -50%) }
+</style>
 <body>
+    <div class="alerts">
+        <p>NOTE: This is still in alpha testing.  Thank you for your patience.</p>
+    </div>
     <app-root></app-root>
     <noscript>
         Please enable JavaScript to continue using this application.
