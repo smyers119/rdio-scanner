@@ -1,5 +1,94 @@
 # Change log
 
+## Version 6.4
+
+- New `-cmd` command line options to allow advanced administrative tasks.
+- New playback mode goes live options which is not enabled by default (issue #175).
+- Fix logs retrieval from administrative dashboard (issue #193).
+- Improved field conversions when retrieving calls from a mysql/mariadb database (issue #194, #198).
+- Highlight replayed call on the history list (issue #196).
+
+## Version 6.3
+
+- Change scroll speed when drag droping talkgroups or units in a system (discussion #170).
+- System Ids listed in the `Config / Options / AFS Systems` will have their talkgroup Ids displayed in AFS format (issue #163).
+- New dirwatch meta tags #GROUP #SYSLBL #TAG #TGAFS and #UNIT for better ProScan compatibility (issue #164).
+- Playback mode will now catch up to live (issue #175).
+- Dirwatch code rewrite (issue #177).
+
+_v6.3.1_
+
+- Playback mode catch up to live, then swith to livefeed mode.
+- Removed the mutex lock on Clients.Count which led to a deadlock and froze call ingestion.
+
+_v6.3.2_
+
+- New #TGLBL metatag for dirwatch for ProScan (%C) or alike.
+- Fix `semacquire` lockup in Clients (issue #177, #181, #182).
+- Replay button now replays from history if pressed multiple times quickly (issue #186).
+
+_v6.3.3_
+
+- Fix concurrent map writes fatal error in dirwatch (issue #187).
+- Brighter LED colors and new orange color.
+- Fix call id when retrieved from a MySQL database.
+- Add loudnorm audio filter to the ffmpeg audio conversion.
+- Show the real IP address in the logs taking into account if behind a proxy.
+- Fix panic when emitting a call to clients.
+
+_v6.3.4_
+
+- Fix ffmpeg audio filter not available on older version (issue #189).
+- Improved logging when run as a service, Windows users can now see these logs in the events viewer.
+- Dirwatch now catches panic errors and logs them.
+
+_v6.3.5_
+
+- Replace standard map with sync.map in dirwatch.
+- Fix the ffmpeg version test.
+- Fix led color type, orage -> orange.
+- Fix incorrect options when reading from a mysql database (issue #190).
+
+_v6.3.6_
+
+- Fix systems order properties not sent to clients.
+- Fix side panels not scrolling to top when opened.
+
+## Version 6.2
+
+- New max clients options which is 200 by default.
+- New show listeners count options which is disabled by default (issue #125).
+- Fix panic: concurrent write to websocket connection on goroutine.
+- Fix units import from SDR Trunk (issue #150).
+
+_v6.2.1_
+
+- Fix SIGSEGV error in Units.Merge (issue #151).
+
+_v6.2.2_
+
+- Fix another SIGSEGV error in Units.Merge (issue #151).
+
+_v6.2.3_
+
+- New random UUID in the JSON-Web Token payload.
+- Fix dirwatch not properly shutting down when a new configuration is applied.
+- Fix dashboard logout not sending HTTP 200 OK status.
+- Clear the active dirwatch list when stopped.
+- Pauses calls ingestion before database pruning.
+- Fix regex for units in driwatch type SDRTrunk (discussion #155).
+- Update SQLite driver.
+
+_v6.2.4_
+
+- Fix call frequencies table not being transmitted to downstream.
+- Avoid using setInterval and setTimeout in the webapp.
+- Fix talkgroup search filter upon new configuration (issue #158).
+
+_v6.2.5_
+
+- Fix unnecessary auto populate of unit id/label (issue #160).
+
 ## Version 6.1
 
 - Calls now support patched talkgroups.
@@ -85,6 +174,24 @@ _v6.1.13_
 - Better handling of dead client connections.
 - Fix too many open files (issue #129).
 - Remove net.http error messages from the output (issue #131).
+
+_v6.1.14_
+
+- Fix FAQ section not being added to the PDF documents.
+- Bump delay before killing unauthenticated clients from 10 seconds to 60 seconds.
+- Remove the gitter.im support forum from the documentation and prefer github discussions.
+
+_v6.1.15_
+
+- Fix access and downstreams order not retained.
+- Remove the self-signed certificate generator (-ssl create) as it was causing more problems than solutions.
+- Client handling and call ingestion now run on 2 different threads (issue #135).
+- Fix downstream talkgroup select keeps reverting to all talkgroups (issue #136).
+
+_v6.1.16_
+
+- Fix concurrent map access for clients.
+- Some tweaks to websocket management.
 
 ## Version 6.0
 
@@ -403,7 +510,7 @@ _v4.7.6_
 
 ## Version 4.1
 
-- New offline playback mode.
+- New playback mode.
 
 ## Version 4.0
 

@@ -1,5 +1,7 @@
 # How to compile
 
+> RDIO SCANNER REPRESENTS A LOT OF INVESTMENT IN TIME, SUPPORT, TESTS AND MATERIALS. BY INTENTIONALLY MODIFYING ITS CODE TO REMOVE ITS IDENTITY, YOU HARM THE OPEN SOURCE PROJECT AND ITS AUTHOR. PLEASE BE RESPECTFUL, SPONSOR THIS PROJECT IF YOU CAN, USE NATIVE APPS IF POSSIBLE.
+
 The official version of [Rdio Scanner](https://github.com/chuot/rdio-scanner) is compiled on a PC using the current version of Fedora Workstation. You should have no problem building on another platform as long as the prerequisites are available and installed.
 
 ## Install the prerequisites
@@ -11,6 +13,7 @@ Your os distribution may have all of the following prerequisites available in it
 - latest long-term support version of Node.js ([here](https://nodejs.org/en/))
 - latest version of Go ([here](https://go.dev/dl/))
 - latest version of Pandoc with pandoc-pdf ([here](https://pandoc.org/installing.html))
+- latest version of TeX Live ([here](https://www.tug.org/texlive/))
 - latest version of Info-Zip ([here](http://infozip.sourceforge.net/))
 - latest version of podman ([here](https://podman.io/)), only for building containers
 
@@ -24,13 +27,13 @@ Clone the official repository on your computer and start the build process.
 
 When finished, you will find the precompiled versions for various platforms in the `dist` folder.
 
-        rdio-scanner-darwin-amd64-v6.1.13.zip
-        rdio-scanner-darwin-arm64-v6.1.13.zip
-        rdio-scanner-freebsd-amd64-v6.1.13.zip
-        rdio-scanner-linux-386-v6.1.13.zip
-        rdio-scanner-linux-amd64-v6.1.13.zip
-        rdio-scanner-linux-arm64-v6.1.13.zip
-        rdio-scanner-linux-arm-v6.1.13.zip
-        rdio-scanner-windows-amd64-v6.1.13.zip
+        rdio-scanner-darwin-amd64-v6.4.0.zip
+        rdio-scanner-darwin-arm64-v6.4.0.zip
+        rdio-scanner-freebsd-amd64-v6.4.0.zip
+        rdio-scanner-linux-386-v6.4.0.zip
+        rdio-scanner-linux-amd64-v6.4.0.zip
+        rdio-scanner-linux-arm64-v6.4.0.zip
+        rdio-scanner-linux-arm-v6.4.0.zip
+        rdio-scanner-windows-amd64-v6.4.0.zip
 
 **Happy Rdio scanning !**

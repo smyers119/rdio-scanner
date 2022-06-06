@@ -19,6 +19,8 @@
 
 import { DOCUMENT } from '@angular/common';
 import { EventEmitter, Inject, Injectable, OnDestroy } from '@angular/core';
+import { interval, Subscription, timer } from 'rxjs';
+import { takeWhile } from 'rxjs/operators';
 import { AppUpdateService } from '../../shared/update/update.service';
 import {
     RdioScannerAvoidOptions,
@@ -51,6 +53,7 @@ enum WebsocketCommand {
     Config = 'CFG',
     Expired = 'XPR',
     ListCall = 'LCL',
+    ListenersCount = 'LSC',
     LivefeedMap = 'LFM',
     Max = 'MAX',
     Pin = 'PIN',
@@ -79,6 +82,8 @@ export class RdioScannerService implements OnDestroy {
         dimmerDelay: false,
         groups: {},
         keypadBeeps: false,
+        playbackGoesLive: false,
+        showListenersCount: false,
         systems: [],
         tags: {},
         tagsToggle: false,
@@ -92,8 +97,11 @@ export class RdioScannerService implements OnDestroy {
 
     private playbackList: RdioScannerPlaybackList | undefined;
     private playbackPending: number | undefined;
+    private playbackRefreshing = false;
 
-    private skipDelay: number | undefined;
+    private replayDelay: Subscription | undefined;
+
+    private skipDelay: Subscription | undefined;
 
     private websocket: WebSocket | undefined;
 
@@ -109,7 +117,7 @@ export class RdioScannerService implements OnDestroy {
     }
 
     authenticate(password: string): void {
-        this.sendtoWebsocket(WebsocketCommand.Pin, btoa(password));
+        this.sendtoWebsocket(WebsocketCommand.Pin, window.btoa(password));
     }
 
     avoid(options: RdioScannerAvoidOptions = {}): void {
@@ -359,7 +367,7 @@ export class RdioScannerService implements OnDestroy {
         }
 
         if (this.skipDelay) {
-            clearTimeout(this.skipDelay);
+            this.skipDelay.unsubscribe();
 
             this.skipDelay = undefined;
         }
@@ -455,12 +463,7 @@ export class RdioScannerService implements OnDestroy {
 
             this.event.emit({ call: this.call, queue });
 
-            let interval = setInterval(() => {
-                if (!this.call) {
-                    clearInterval(interval);
-                    return;
-                }
-
+            interval(500).pipe(takeWhile(() => !!this.call)).subscribe(() => {
                 if (this.audioContext && !isNaN(this.audioContext.currentTime)) {
                     if (isNaN(this.audioSourceStartTime)) {
                         this.audioSourceStartTime = this.audioContext.currentTime;
@@ -470,7 +473,7 @@ export class RdioScannerService implements OnDestroy {
                         this.event.emit({ time: this.audioContext.currentTime - this.audioSourceStartTime });
                     }
                 }
-            }, 500);
+            });
         }, () => {
             this.event.emit({ call: this.call, queue });
 
@@ -521,15 +524,15 @@ export class RdioScannerService implements OnDestroy {
         this.stop();
 
         if (options?.delay) {
-            this.skipDelay = window.setTimeout(() => {
+            this.skipDelay = timer(1000).subscribe(() => {
                 this.skipDelay = undefined;
 
                 play();
-            }, 1000);
+            });
 
         } else {
             if (this.skipDelay) {
-                clearTimeout(this.skipDelay);
+                this.skipDelay?.unsubscribe();
 
                 this.skipDelay = undefined;
             }
@@ -580,6 +583,8 @@ export class RdioScannerService implements OnDestroy {
 
     stopPlaybackMode(): void {
         this.livefeedMode = RdioScannerLivefeedMode.Offline;
+
+        this.playbackRefreshing = false;
 
         this.clearQueue();
 
@@ -727,7 +732,7 @@ export class RdioScannerService implements OnDestroy {
             const file = call.audio.data.reduce((str, val) => str += String.fromCharCode(val), '');
             const fileName = call.audioName || 'unknown.dat';
             const fileType = call.audioType || 'audio/*';
-            const fileUri = `data:${fileType};base64,${btoa(file)}`;
+            const fileUri = `data:${fileType};base64,${window.btoa(file)}`;
 
             const el = this.document.createElement('a');
 
@@ -776,7 +781,7 @@ export class RdioScannerService implements OnDestroy {
             this.event.emit({ linked: false });
 
             if (ev.code !== 1000) {
-                setTimeout(() => this.reconnectWebsocket(), 2000);
+                timer(2000).subscribe(() => this.reconnectWebsocket());
             }
         };
 
@@ -815,9 +820,6 @@ export class RdioScannerService implements OnDestroy {
                             this.queue(this.transformCall(call), { priority: true });
 
                         } else {
-                            if (this.isPatched(call)) {
-                                call.patched = true;
-                            }
                             this.queue(this.transformCall(call));
                         }
                     }
@@ -831,10 +833,16 @@ export class RdioScannerService implements OnDestroy {
                         dimmerDelay: typeof config.dimmerDelay === 'number' ? config.dimmerDelay : 5000,
                         groups: typeof config.groups !== null && typeof config.groups === 'object' ? config.groups : {},
                         keypadBeeps: config.keypadBeeps !== null && typeof config.keypadBeeps === 'object' ? config.keypadBeeps : {},
+                        playbackGoesLive: typeof config.playbackGoesLive === 'boolean' ? config.playbackGoesLive : false,
+                        showListenersCount: typeof config.showListenersCount === 'boolean' ? config.showListenersCount : false,
                         systems: Array.isArray(config.systems) ? config.systems.slice() : [],
                         tags: typeof config.tags !== null && typeof config.tags === 'object' ? config.tags : {},
-                        tagsToggle: typeof config.tagsToggle !== null && typeof config.tagsToggle === 'boolean' ? config.tagsToggle : false,
+                        tagsToggle: typeof config.tagsToggle === 'boolean' ? config.tagsToggle : false,
                     };
+
+                    if (typeof config.afs === 'string' && config.afs.length) {
+                        this.config['afs'] = config.afs;
+                    }
 
                     this.rebuildLivefeedMap();
 
@@ -874,6 +882,11 @@ export class RdioScannerService implements OnDestroy {
 
                     break;
 
+                case WebsocketCommand.ListenersCount:
+                    this.event.emit({ listeners: message[1] });
+
+                    break;
+
                 case WebsocketCommand.Max:
                     this.event.emit({ auth: true, tooMany: true });
 
@@ -900,7 +913,17 @@ export class RdioScannerService implements OnDestroy {
 
             } else if (index === 0) {
                 if (this.playbackList.options.offset < this.playbackList.options.limit) {
-                    this.stopPlaybackMode();
+                    if (this.playbackRefreshing) {
+                        this.stopPlaybackMode();
+
+                        if (this.config.playbackGoesLive) {
+                            this.startLivefeed();
+                        }
+
+                    } else {
+                        this.playbackRefreshing = true;
+                        this.searchCalls(this.playbackList.options);
+                    }
 
                 } else {
                     this.searchCalls(Object.assign({}, this.playbackList.options, {
@@ -922,8 +945,16 @@ export class RdioScannerService implements OnDestroy {
                         offset: this.playbackList.options.offset + this.playbackList.options.limit,
                     }));
 
-                } else {
+                } else if (this.playbackRefreshing) {
                     this.stopPlaybackMode();
+                    
+                    if (this.config.playbackGoesLive) {
+                        this.startLivefeed();
+                    }
+
+                } else {
+                    this.playbackRefreshing = true;
+                    this.searchCalls(this.playbackList.options);
                 }
 
             } else {

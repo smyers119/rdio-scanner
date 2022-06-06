@@ -38,7 +38,9 @@ type Log struct {
 }
 
 type Logs struct {
-	mutex sync.Mutex
+	database *Database
+	mutex    sync.Mutex
+	daemon   *Daemon
 }
 
 func NewLogs() *Logs {
@@ -47,20 +49,34 @@ func NewLogs() *Logs {
 	}
 }
 
-func (logs *Logs) LogEvent(db *Database, level string, message string) error {
+func (logs *Logs) LogEvent(level string, message string) error {
 	logs.mutex.Lock()
 	defer logs.mutex.Unlock()
 
-	log.Println(message)
+	if logs.daemon != nil {
+		switch level {
+		case LogLevelError:
+			logs.daemon.Logger.Error(message)
+		case LogLevelWarn:
+			logs.daemon.Logger.Warning(message)
+		case LogLevelInfo:
+			logs.daemon.Logger.Info(message)
+		}
 
-	l := Log{
-		DateTime: time.Now().UTC(),
-		Level:    level,
-		Message:  message,
+	} else {
+		log.Println(message)
 	}
 
-	if _, err := db.Sql.Exec("insert into `rdioScannerLogs` (`dateTime`, `level`, `message`) values (?, ?, ?)", l.DateTime, l.Level, l.Message); err != nil {
-		return fmt.Errorf("logs.logevent: %v", err)
+	if logs.database != nil {
+		l := Log{
+			DateTime: time.Now().UTC(),
+			Level:    level,
+			Message:  message,
+		}
+
+		if _, err := logs.database.Sql.Exec("insert into `rdioScannerLogs` (`dateTime`, `level`, `message`) values (?, ?, ?)", l.DateTime, l.Level, l.Message); err != nil {
+			return fmt.Errorf("logs.logevent: %v", err)
+		}
 	}
 
 	return nil
@@ -98,7 +114,7 @@ func (logs *Logs) Search(searchOptions *LogsSearchOptions, db *Database) (*LogsS
 	defer logs.mutex.Unlock()
 
 	formatError := func(err error) error {
-		return fmt.Errorf("newLogResults: %v", err)
+		return fmt.Errorf("logs.search: %v", err)
 	}
 
 	logResults := &LogsSearchResults{
@@ -108,7 +124,7 @@ func (logs *Logs) Search(searchOptions *LogsSearchOptions, db *Database) (*LogsS
 
 	switch v := searchOptions.Level.(type) {
 	case string:
-		where += fmt.Sprintf(" and `level` == '%v'", v)
+		where += fmt.Sprintf(" and `level` = '%v'", v)
 	}
 
 	switch v := searchOptions.Sort.(type) {
@@ -157,10 +173,6 @@ func (logs *Logs) Search(searchOptions *LogsSearchOptions, db *Database) (*LogsS
 	query = fmt.Sprintf("select `dateTime` from `rdioScannerLogs` where %v order by `dateTime` asc", where)
 	if err = db.Sql.QueryRow(query).Scan(&dateTime); err != nil && err != sql.ErrNoRows {
 		return nil, formatError(fmt.Errorf("%v, %v", err, query))
-	}
-
-	if dateTime == nil {
-		return logResults, nil
 	}
 
 	if t, err := db.ParseDateTime(dateTime); err == nil {
@@ -217,6 +229,14 @@ func (logs *Logs) Search(searchOptions *LogsSearchOptions, db *Database) (*LogsS
 	}
 
 	return logResults, nil
+}
+
+func (logs *Logs) setDaemon(d *Daemon) {
+	logs.daemon = d
+}
+
+func (logs *Logs) setDatabase(d *Database) {
+	logs.database = d
 }
 
 type LogsSearchOptions struct {

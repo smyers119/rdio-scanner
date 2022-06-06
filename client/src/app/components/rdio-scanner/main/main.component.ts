@@ -20,6 +20,7 @@
 import { ChangeDetectorRef, Component, EventEmitter, OnDestroy, OnInit, Output, ViewChild } from '@angular/core';
 import { FormBuilder } from '@angular/forms';
 import { MatInput } from '@angular/material/input';
+import { Subscription, timer } from 'rxjs';
 import packageInfo from '../../../../../package.json';
 import {
     RdioScannerAvoidOptions,
@@ -75,6 +76,8 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
 
     linked = false;
 
+    listeners = 0;
+
     livefeedOffline = true;
     livefeedOnline = false;
     livefeedPaused = false;
@@ -85,6 +88,13 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
 
     playbackMode = false;
 
+    replayOffset = 0;
+    replayTimer: Subscription | undefined;
+
+    get showListenersCount(): boolean {
+        return this.config?.showListenersCount || false;
+    }
+
     @Output() openSearchPanel = new EventEmitter<void>();
 
     @Output() openSelectPanel = new EventEmitter<void>();
@@ -93,11 +103,11 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
 
     @ViewChild('password', { read: MatInput }) private authPassword: MatInput | undefined;
 
-    private clockTimer: number | undefined;
+    private clockTimer: Subscription | undefined;
 
     private config: RdioScannerConfig | undefined;
 
-    private dimmerTimer: number | undefined;
+    private dimmerTimer: Subscription | undefined;
 
     private eventSubscription = this.rdioScannerService.event.subscribe((event: RdioScannerEvent) => this.eventHandler(event));
 
@@ -194,9 +204,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
     }
 
     ngOnDestroy(): void {
-        if (this.clockTimer) {
-            clearInterval(this.clockTimer);
-        }
+        this.clockTimer?.unsubscribe();
 
         this.eventSubscription.unsubscribe();
     }
@@ -233,7 +241,27 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
             if (!this.livefeedPaused && (this.call || this.callPrevious)) {
                 this.rdioScannerService.beep(RdioScannerBeepStyle.Activate);
 
-                this.rdioScannerService.replay();
+                if (this.replayTimer instanceof Subscription) {
+                    this.replayTimer.unsubscribe();
+                    this.replayOffset = Math.min(this.callHistory.length, this.replayOffset + 1);
+                }
+
+                this.replayTimer = timer(1000).subscribe(() => {
+                    this.replayTimer = undefined;
+                    this.replayOffset = 0;
+                });
+
+                if (this.call && !this.replayOffset) {
+                    this.rdioScannerService.replay()
+                } else if (this.callPrevious !== this.callHistory[0]) {
+                    if (this.replayOffset) {
+                        this.rdioScannerService.play(this.callHistory[this.replayOffset - 1]);
+                    } else {
+                        this.rdioScannerService.replay()
+                    }
+                } else if (this.replayOffset < this.callHistory.length) {
+                    this.rdioScannerService.play(this.callHistory[this.replayOffset]);
+                }
 
             } else {
                 this.rdioScannerService.beep(RdioScannerBeepStyle.Denied);
@@ -297,7 +325,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
             password = window?.localStorage?.getItem(LOCAL_STORAGE_KEY);
 
             if (password) {
-                password = atob(password);
+                password = window.atob(password);
 
                 window.localStorage.removeItem(LOCAL_STORAGE_KEY);
             }
@@ -338,7 +366,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
             const password = this.authForm.get('password')?.value;
 
             if (password) {
-                window?.localStorage?.setItem(LOCAL_STORAGE_KEY, btoa(password));
+                window?.localStorage?.setItem(LOCAL_STORAGE_KEY, window.btoa(password));
 
                 this.authForm.reset();
             }
@@ -366,6 +394,10 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
 
         if ('linked' in event) {
             this.linked = event.linked || false;
+        }
+
+        if ('listeners' in event) {
+            this.listeners = event.listeners || 0;
         }
 
         if ('map' in event) {
@@ -403,6 +435,10 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
         this.updateDisplay();
     }
 
+    private formatAfs(n: number): string {
+        return `${(n >> 7 & 15).toString().padStart(2, '0')}-${(n >> 3 & 15).toString().padStart(2, '0')}${n & 7}`;
+    }
+
     private formatFrequency(frequency: number | undefined): string {
         return typeof frequency === 'number' ? frequency
             .toString()
@@ -411,40 +447,44 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
             .concat(' Hz') : '';
     }
 
-    private syncClock(): void {
-        if (this.clockTimer) {
-            clearInterval(this.clockTimer);
+    private isAfsSystem(talkgroupId: number): boolean {
+        if (typeof this.config?.afs !== 'string') {
+            return false;
         }
+
+        return this.config.afs.split(',').includes(talkgroupId.toString());
+    }
+
+    private syncClock(): void {
+        this.clockTimer?.unsubscribe();
 
         this.clock = new Date();
 
-        this.clockTimer = window.setInterval(() => this.syncClock(), 1000 * (60 - this.clock.getSeconds()));
+        this.clockTimer = timer(1000 * (60 - this.clock.getSeconds())).subscribe(() => this.syncClock());
     }
 
     private updateDimmer(): void {
         if (typeof this.config?.dimmerDelay === 'number') {
-            if (this.dimmerTimer) {
-                clearTimeout(this.dimmerTimer);
-            }
+            this.dimmerTimer?.unsubscribe();
 
             this.dimmer = true;
 
-            this.dimmerTimer = window.setTimeout(() => {
-                if (this.dimmerTimer) {
-                    clearTimeout(this.dimmerTimer);
-                }
+            this.dimmerTimer = timer(this.config.dimmerDelay).subscribe(() => {
+                this.dimmerTimer?.unsubscribe();
 
                 this.dimmerTimer = undefined;
 
                 this.dimmer = false;
 
                 this.ngChangeDetectorRef.detectChanges();
-            }, this.config.dimmerDelay);
+            });
         }
     }
 
     private updateDisplay(time = this.callTime): void {
         if (this.call) {
+            let isAfs = this.isAfsSystem(this.call.system);
+
             this.callProgress = new Date(this.call.dateTime);
             this.callProgress.setSeconds(this.callProgress.getSeconds() + time);
 
@@ -452,7 +492,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
 
             this.callTag = this.call.talkgroupData?.tag || '';
 
-            this.callTalkgroup = this.call.talkgroupData?.label || `${this.call.talkgroup}`;
+            this.callTalkgroup = this.call.talkgroupData?.label || `${isAfs ? this.formatAfs(this.call.talkgroup) : this.call.talkgroup}`;
 
             this.callTalkgroupName = this.call.talkgroupData?.name || this.formatFrequency(this.call?.frequency);
 
@@ -478,7 +518,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
             if (Array.isArray(this.call.sources) && this.call.sources.length) {
                 const source = this.call.sources.reduce((p, v) => (v.pos || 0) <= time ? v : p, {});
 
-                this.callTalkgroupId = `${this.call.talkgroup}`;
+                this.callTalkgroupId = isAfs ? this.formatAfs(this.call.talkgroup) : this.call.talkgroup.toString();
 
                 if (typeof source.src === 'number' && Array.isArray(this.call.systemData?.units)) {
                     const callUnit = this.call?.systemData?.units?.find((u) => u.id === source.src);
@@ -490,7 +530,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
                 }
 
             } else {
-                this.callTalkgroupId = this.call.talkgroup.toString();
+                this.callTalkgroupId = isAfs ? this.formatAfs(this.call.talkgroup) : this.call.talkgroup.toString();
 
                 this.callUnit = typeof this.call.source === 'number' ? `${this.call.source}` : '';
             }
@@ -509,7 +549,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
         const call = this.call || this.callPrevious;
 
         if (call) {
-            if (call.patched) {
+            if (this.rdioScannerService.isPatched(call)) {
                 this.avoided = false;
                 this.patched = true;
             } else {
@@ -518,7 +558,7 @@ export class RdioScannerMainComponent implements OnDestroy, OnInit {
             }
         }
 
-        const colors = ['blue', 'cyan', 'green', 'magenta', 'red', 'white', 'yellow'];
+        const colors = ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white', 'yellow'];
 
         this.ledStyle = this.call && this.livefeedPaused ? 'on paused' : this.call ? 'on' : 'off';
 

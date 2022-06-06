@@ -24,12 +24,12 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/acme/autocert"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -46,28 +46,6 @@ func main() {
 	config := NewConfig()
 
 	controller := NewController(config)
-
-	if config.newAdminPassword != "" {
-		if hash, err := bcrypt.GenerateFromPassword([]byte(config.newAdminPassword), bcrypt.DefaultCost); err == nil {
-			if err := controller.Options.Read(controller.Database); err != nil {
-				log.Fatal(err)
-			}
-
-			controller.Options.adminPassword = string(hash)
-			controller.Options.adminPasswordNeedChange = config.newAdminPassword == defaults.adminPassword
-
-			if err := controller.Options.Write(controller.Database); err != nil {
-				log.Fatal(err)
-			}
-
-			controller.Logs.LogEvent(controller.Database, LogLevelInfo, "admin password changed.")
-
-			os.Exit(0)
-
-		} else {
-			log.Fatal(err)
-		}
-	}
 
 	fmt.Printf("\nRdio Scanner v%s\n", Version)
 	fmt.Printf("----------------------------------\n")
@@ -114,6 +92,10 @@ func main() {
 
 	http.HandleFunc("/api/admin/password", controller.Admin.PasswordHandler)
 
+	http.HandleFunc("/api/admin/user-add", controller.Admin.UserAddHandler)
+
+	http.HandleFunc("/api/admin/user-remove", controller.Admin.UserRemoveHandler)
+
 	http.HandleFunc("/api/call-upload", controller.Api.CallUploadHandler)
 
 	http.HandleFunc("/api/trunk-recorder-call-upload", controller.Api.TrunkRecorderCallUploadHandler)
@@ -126,6 +108,8 @@ func main() {
 				CheckOrigin: func(r *http.Request) bool {
 					return true
 				},
+				ReadBufferSize:  1024,
+				WriteBufferSize: 1024,
 			}
 
 			conn, err := upgrader.Upgrade(w, r, nil)
@@ -134,7 +118,7 @@ func main() {
 			}
 
 			client := &Client{}
-			if err = client.Init(controller, conn); err != nil {
+			if err = client.Init(controller, r, conn); err != nil {
 				log.Println(err)
 			}
 
@@ -189,9 +173,8 @@ func main() {
 		s := &http.Server{
 			Addr:         addr,
 			TLSConfig:    tlsConfig,
-			ReadTimeout:  60 * time.Second,
-			WriteTimeout: 60 * time.Second,
-			IdleTimeout:  120 * time.Second,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
 			ErrorLog:     log.New(ioutil.Discard, "", 0),
 		}
 
@@ -243,4 +226,20 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func GetRemoteAddr(r *http.Request) string {
+	re := regexp.MustCompile(`(\[[^\]]+\]|[^:]+):.*`)
+
+	for _, addr := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
+		if ip := re.ReplaceAllString(addr, "$1"); len(ip) > 0 {
+			return ip
+		}
+	}
+
+	if ip := re.ReplaceAllString(r.RemoteAddr, "$1"); len(ip) > 0 {
+		return ip
+	}
+
+	return "unknown"
 }

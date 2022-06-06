@@ -20,6 +20,7 @@
 import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { MatSidenav } from '@angular/material/sidenav';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { timer } from 'rxjs';
 import { RdioScannerEvent, RdioScannerLivefeedMode } from './rdio-scanner';
 import { RdioScannerService } from './rdio-scanner.service';
 import { RdioScannerNativeComponent } from './native/native.component';
@@ -53,6 +54,37 @@ export class RdioScannerComponent implements OnDestroy, OnInit {
         }
     }
 
+    ngOnDestroy(): void {
+        this.eventSubscription.unsubscribe();
+    }
+
+    ngOnInit(): void {
+        /*
+         * BEGIN OF RED TAPE:
+         * 
+         * By modifying, deleting or disabling the following lines, you harm
+         * the open source project and its author.  Rdio Scanner represents a lot of
+         * investment in time, support, testing and hardware.
+         * 
+         * Be respectful, sponsor the project if you can, use native apps when possible.
+         * 
+         */
+        timer(10000).subscribe(() => {
+            const ua: String = navigator.userAgent;
+
+            if (ua.includes('Android') || ua.includes('iPad') || ua.includes('iPhone')) {
+                this.matSnackBar.openFromComponent(RdioScannerNativeComponent, { panelClass: 'snackbar-white' });
+            }
+        });
+        /**
+         * END OF RED TAPE.
+         */
+    }
+
+    scrollTop(e: HTMLElement): void {
+        setTimeout(() => e.scrollTo(0, 0));
+    }
+
     start(): void {
         this.rdioScannerService.startLivefeed();
     }
@@ -62,33 +94,6 @@ export class RdioScannerComponent implements OnDestroy, OnInit {
 
         this.searchPanel?.close();
         this.selectPanel?.close();
-    }
-
-    ngOnDestroy(): void {
-        this.eventSubscription.unsubscribe();
-    }
-
-    ngOnInit(): void {
-        /*
-         * BEGIN OF RED TAPE:
-         * 
-         * By modifying, deleting or disabling the following lines, you are harming
-         * the open source project and its author.  Rdio Scanner represents a lot of
-         * investment in time, support, testing and hardware.
-         * 
-         * Be respectful, sponsor the project if you can, use native apps when possible.
-         * 
-         */
-        setTimeout(() => {
-            const ua: String = navigator.userAgent;
-
-            if (ua.includes('Android') || ua.includes('iPad') || ua.includes('iPhone')) {
-                this.matSnackBar.openFromComponent(RdioScannerNativeComponent, { panelClass: 'snackbar-white' });
-            }
-        }, 10000);
-        /**
-         * END OF RED TAPE.
-         */
     }
 
     toggleFullscreen(): void {

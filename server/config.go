@@ -35,23 +35,23 @@ const (
 )
 
 type Config struct {
-	BaseDir          string
-	ConfigFile       string
-	DbType           string
-	DbFile           string
-	DbHost           string
-	DbPort           uint
-	DbName           string
-	DbUsername       string
-	DbPassword       string
-	Listen           string
-	SslAutoCert      string
-	SslCaCertFile    string
-	SslCaKeyFile     string
-	SslCertFile      string
-	SslKeyFile       string
-	SslListen        string
-	newAdminPassword string
+	BaseDir       string
+	ConfigFile    string
+	DbType        string
+	DbFile        string
+	DbHost        string
+	DbPort        uint
+	DbName        string
+	DbUsername    string
+	DbPassword    string
+	Listen        string
+	SslAutoCert   string
+	SslCaCertFile string
+	SslCaKeyFile  string
+	SslCertFile   string
+	SslKeyFile    string
+	SslListen     string
+	daemon        *Daemon
 }
 
 func NewConfig() *Config {
@@ -66,10 +66,10 @@ func NewConfig() *Config {
 	)
 
 	var (
+		command       = flag.String(COMMAND_ARG, "", fmt.Sprintf("advanced administrative tasks (use -%s %s for usage)", COMMAND_ARG, COMMAND_HELP))
 		config        = &Config{}
 		configSave    = flag.Bool("config_save", false, fmt.Sprintf("save configuration to %s", defaultConfigFile))
 		serviceAction = flag.String("service", "", "service command, one of start, stop, restart, install, uninstall")
-		sslCreate     = flag.Bool("ssl_create", false, "create self-signed certificates")
 		version       = flag.Bool("version", false, "show application version")
 	)
 
@@ -101,7 +101,6 @@ func NewConfig() *Config {
 	flag.StringVar(&config.SslCertFile, "ssl_cert_file", "", "ssl PEM formated certificate")
 	flag.StringVar(&config.SslKeyFile, "ssl_key_file", "", "ssl PEM formated key")
 	flag.StringVar(&config.SslListen, "ssl_listen", "", "listening address for ssl")
-	flag.StringVar(&config.newAdminPassword, "admin_password", "", "change admin password")
 	flag.Parse()
 
 	if !config.isBaseDirWritable() {
@@ -115,17 +114,6 @@ func NewConfig() *Config {
 			os.Exit(0)
 		} else {
 			fmt.Printf("error: %s\n", err.Error())
-			os.Exit(-1)
-		}
-
-	case *sslCreate:
-		fmt.Println("generating ssl certificate files")
-
-		if err := CreateSelfSignedCert(config); err == nil {
-			fmt.Println("ssl files created")
-			os.Exit(0)
-		} else {
-			fmt.Printf("error: %s", err.Error())
 			os.Exit(-1)
 		}
 
@@ -190,8 +178,12 @@ func NewConfig() *Config {
 		}
 	}
 
+	if *command != "" {
+		NewCommand(config.BaseDir).Do(*command)
+	}
+
 	if *serviceAction != "" {
-		NewDaemon().Control(*serviceAction)
+		config.daemon = NewDaemon().Control(*serviceAction)
 	}
 
 	return config

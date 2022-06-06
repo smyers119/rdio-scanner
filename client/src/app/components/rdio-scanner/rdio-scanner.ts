@@ -49,7 +49,6 @@ export interface RdioScannerCall {
     frequencies?: RdioScannerCallFrequency[];
     frequency?: number;
     id: number;
-    patched?: boolean;
     patches: number[];
     source?: number;
     sources?: RdioScannerCallSource[];
@@ -90,9 +89,12 @@ export enum RdioScannerCategoryType {
 }
 
 export interface RdioScannerConfig {
+    afs?: string;
     dimmerDelay: number | false;
     groups: { [key: string]: { [key: number]: number[] } };
     keypadBeeps: RdioScannerKeypadBeeps | false;
+    playbackGoesLive: boolean;
+    showListenersCount: boolean;
     systems: RdioScannerSystem[];
     tags: { [key: string]: { [key: number]: number[] } };
     tagsToggle: boolean;
@@ -107,6 +109,7 @@ export interface RdioScannerEvent {
     holdSys?: boolean;
     holdTg?: boolean;
     linked?: boolean;
+    listeners?: number;
     livefeedMode?: RdioScannerLivefeedMode;
     map?: RdioScannerLivefeedMap;
     pause?: boolean;
@@ -157,7 +160,7 @@ export interface RdioScannerSearchOptions {
 export interface RdioScannerSystem {
     id: number;
     label: string;
-    led?: 'blue' | 'cyan' | 'green' | 'magenta' | 'red' | 'white' | 'yellow';
+    led?: 'blue' | 'cyan' | 'green' | 'magenta' | 'orange' | 'red' | 'white' | 'yellow';
     order?: number;
     talkgroups: RdioScannerTalkgroup[];
     units: RdioScannerUnit[];
@@ -168,7 +171,7 @@ export interface RdioScannerTalkgroup {
     group: string;
     id: number;
     label: string;
-    led?: 'blue' | 'cyan' | 'green' | 'magenta' | 'red' | 'white' | 'yellow';
+    led?: 'blue' | 'cyan' | 'green' | 'magenta' | 'orange' | 'red' | 'white' | 'yellow';
     name: string;
     tag: string;
 }

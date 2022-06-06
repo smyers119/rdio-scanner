@@ -30,7 +30,7 @@ type Unit struct {
 	Order uint   `json:"order"`
 }
 
-func (unit *Unit) FromMap(m map[string]interface{}) {
+func (unit *Unit) FromMap(m map[string]interface{}) *Unit {
 	switch v := m["id"].(type) {
 	case float64:
 		unit.Id = uint(v)
@@ -46,6 +46,7 @@ func (unit *Unit) FromMap(m map[string]interface{}) {
 		unit.Order = uint(v)
 	}
 
+	return unit
 }
 
 type Units struct {
@@ -60,24 +61,24 @@ func NewUnits() *Units {
 	}
 }
 
-func (units *Units) Add(id uint, label string) *Units {
-	found := false
+func (units *Units) Add(id uint, label string) (*Units, bool) {
+	added := true
 
 	for _, u := range units.List {
 		if u.Id == id {
-			found = true
+			added = false
 			break
 		}
 	}
 
-	if !found {
+	if added {
 		units.List = append(units.List, &Unit{Id: id, Label: label})
 	}
 
-	return units
+	return units, added
 }
 
-func (units *Units) FromMap(f []interface{}) {
+func (units *Units) FromMap(f []interface{}) *Units {
 	units.mutex.Lock()
 	defer units.mutex.Unlock()
 
@@ -91,15 +92,25 @@ func (units *Units) FromMap(f []interface{}) {
 			units.List = append(units.List, unit)
 		}
 	}
+
+	return units
 }
 
-func (u *Units) Merge(units *Units) {
-	units.mutex.Lock()
-	defer units.mutex.Unlock()
+func (u *Units) Merge(units *Units) bool {
+	merged := false
 
-	for _, v := range units.List {
-		u.Add(v.Id, v.Label)
+	if units != nil {
+		u.mutex.Lock()
+		defer u.mutex.Unlock()
+
+		for _, v := range units.List {
+			if _, added := u.Add(v.Id, v.Label); added {
+				merged = added
+			}
+		}
 	}
+
+	return merged
 }
 
 func (units *Units) Read(db *Database, systemId uint) error {

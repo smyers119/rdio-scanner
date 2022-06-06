@@ -40,7 +40,7 @@ type Downstream struct {
 	Url      string      `json:"url"`
 }
 
-func (downstream *Downstream) FromMap(m map[string]interface{}) {
+func (downstream *Downstream) FromMap(m map[string]interface{}) *Downstream {
 	switch v := m["_id"].(type) {
 	case float64:
 		downstream.Id = uint(v)
@@ -74,6 +74,8 @@ func (downstream *Downstream) FromMap(m map[string]interface{}) {
 	case string:
 		downstream.Url = v
 	}
+
+	return downstream
 }
 
 func (downstream *Downstream) HasAccess(call *Call) bool {
@@ -113,6 +115,7 @@ func (downstream *Downstream) HasAccess(call *Call) bool {
 		if v == "*" {
 			return true
 		}
+
 	}
 
 	return false
@@ -178,7 +181,7 @@ func (downstream *Downstream) Send(call *Call) error {
 	}
 
 	switch v := call.Frequencies.(type) {
-	case []interface{}:
+	case []map[string]interface{}:
 		if w, err := mw.CreateFormField("frequencies"); err == nil {
 			if b, err := json.Marshal(v); err == nil {
 				if _, err = w.Write(b); err != nil {
@@ -360,7 +363,7 @@ func NewDownstreams() *Downstreams {
 	}
 }
 
-func (downstreams *Downstreams) FromMap(f []interface{}) {
+func (downstreams *Downstreams) FromMap(f []interface{}) *Downstreams {
 	downstreams.mutex.Lock()
 	defer downstreams.mutex.Unlock()
 
@@ -374,14 +377,17 @@ func (downstreams *Downstreams) FromMap(f []interface{}) {
 			downstreams.List = append(downstreams.List, downstream)
 		}
 	}
+
+	return downstreams
 }
 
 func (downstreams *Downstreams) Read(db *Database) error {
 	var (
-		err   error
-		id    sql.NullFloat64
-		order sql.NullFloat64
-		rows  *sql.Rows
+		err     error
+		id      sql.NullFloat64
+		order   sql.NullFloat64
+		rows    *sql.Rows
+		systems string
 	)
 
 	downstreams.mutex.Lock()
@@ -400,7 +406,7 @@ func (downstreams *Downstreams) Read(db *Database) error {
 	for rows.Next() {
 		downstream := &Downstream{}
 
-		if err = rows.Scan(&id, &downstream.Apikey, &downstream.Disabled, &order, &downstream.Systems, &downstream.Url); err != nil {
+		if err = rows.Scan(&id, &downstream.Apikey, &downstream.Disabled, &order, &systems, &downstream.Url); err != nil {
 			break
 		}
 
@@ -412,13 +418,12 @@ func (downstreams *Downstreams) Read(db *Database) error {
 			downstream.Apikey = uuid.New().String()
 		}
 
-		switch v := downstream.Systems.(type) {
-		case string:
-			if err = json.Unmarshal([]byte(v), &downstream.Systems); err != nil {
-				downstream.Systems = defaults.downstream.systems
-			}
-		default:
-			downstream.Systems = defaults.downstream.systems
+		if order.Valid && order.Float64 > 0 {
+			downstream.Order = uint(order.Float64)
+		}
+
+		if err = json.Unmarshal([]byte(systems), &downstream.Systems); err != nil {
+			downstream.Systems = []interface{}{}
 		}
 
 		if len(downstream.Url) == 0 {
@@ -440,11 +445,7 @@ func (downstreams *Downstreams) Read(db *Database) error {
 func (downstreams *Downstreams) Send(controller *Controller, call *Call) {
 	for _, downstream := range downstreams.List {
 		logEvent := func(logLevel string, message string) {
-			controller.Logs.LogEvent(
-				controller.Database,
-				logLevel,
-				fmt.Sprintf("downstream: system=%v talkgroup=%v file=%v to %v %v", call.System, call.Talkgroup, call.AudioName, downstream.Url, message),
-			)
+			controller.Logs.LogEvent(logLevel, fmt.Sprintf("downstream: system=%v talkgroup=%v file=%v to %v %v", call.System, call.Talkgroup, call.AudioName, downstream.Url, message))
 		}
 
 		if downstream.HasAccess(call) {

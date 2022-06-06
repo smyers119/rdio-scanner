@@ -16,45 +16,40 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
 
 type Controller struct {
-	Admin        *Admin
-	Api          *Api
-	Calls        *Calls
-	Config       *Config
-	Database     *Database
-	Accesses     *Accesses
-	Apikeys      *Apikeys
-	Dirwatches   *Dirwatches
-	Downstreams  *Downstreams
-	Groups       *Groups
-	Logs         *Logs
-	Options      *Options
-	Scheduler    *Scheduler
-	Systems      *Systems
-	Tags         *Tags
-	Clients      map[*Client]bool
-	Register     chan *Client
-	Unregister   chan *Client
-	Ingest       chan *Call
-	ffmpeg       bool
-	ffmpegWarned bool
-	ingestMutex  sync.Mutex
-	running      bool
+	Admin       *Admin
+	Api         *Api
+	Calls       *Calls
+	Config      *Config
+	Database    *Database
+	Accesses    *Accesses
+	Apikeys     *Apikeys
+	Dirwatches  *Dirwatches
+	Downstreams *Downstreams
+	FFMpeg      *FFMpeg
+	Groups      *Groups
+	Logs        *Logs
+	Options     *Options
+	Scheduler   *Scheduler
+	Systems     *Systems
+	Tags        *Tags
+	Clients     *Clients
+	Register    chan *Client
+	Unregister  chan *Client
+	Ingest      chan *Call
+	ingestMutex sync.Mutex
+	running     bool
 }
 
 func NewController(config *Config) *Controller {
@@ -65,15 +60,16 @@ func NewController(config *Config) *Controller {
 		Calls:       NewCalls(),
 		Dirwatches:  NewDirwatches(),
 		Downstreams: NewDownstreams(),
+		FFMpeg:      NewFFMpeg(),
 		Groups:      NewGroups(),
 		Logs:        NewLogs(),
 		Options:     NewOptions(),
 		Systems:     NewSystems(),
 		Tags:        NewTags(),
-		Clients:     make(map[*Client]bool),
-		Register:    make(chan *Client, 64),
-		Unregister:  make(chan *Client, 64),
-		Ingest:      make(chan *Call, 64),
+		Clients:     NewClients(),
+		Register:    make(chan *Client),
+		Unregister:  make(chan *Client),
+		Ingest:      make(chan *Call),
 		ingestMutex: sync.Mutex{},
 	}
 
@@ -82,84 +78,19 @@ func NewController(config *Config) *Controller {
 	controller.Database = NewDatabase(config)
 	controller.Scheduler = NewScheduler(controller)
 
+	controller.Logs.setDaemon(config.daemon)
+	controller.Logs.setDatabase(controller.Database)
+
 	return controller
 }
 
-func (controller *Controller) ConvertAudio(call *Call) {
-	var (
-		args = []string{"-i", "-"}
-		err  error
-	)
-
-	if !controller.ffmpeg {
-		if !controller.ffmpegWarned {
-			controller.ffmpegWarned = true
-
-			controller.Logs.LogEvent(controller.Database, LogLevelWarn, "ffmpeg is not available, no audio conversion will be performed.")
-		}
-		return
-	}
-
-	if system, ok := controller.Systems.GetSystem(call.System); ok {
-		if talkgroup, ok := system.Talkgroups.GetTalkgroup(call.Talkgroup); ok {
-			if tag, ok := controller.Tags.GetTag(talkgroup.TagId); ok {
-				args = append(args,
-					"-metadata", fmt.Sprintf("album=%v", talkgroup.Label),
-					"-metadata", fmt.Sprintf("artist=%v", system.Label),
-					"-metadata", fmt.Sprintf("date=%v", call.DateTime),
-					"-metadata", fmt.Sprintf("genre=%v", tag),
-					"-metadata", fmt.Sprintf("title=%v", talkgroup.Name),
-				)
-			}
-		}
-	}
-
-	args = append(args, "-c:a", "aac", "-b:a", "32k", "-movflags", "frag_keyframe+empty_moov", "-f", "ipod", "-")
-
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stdin = bytes.NewReader(call.Audio)
-
-	stdout := bytes.NewBuffer([]byte(nil))
-	cmd.Stdout = stdout
-
-	stderr := bytes.NewBuffer([]byte(nil))
-	cmd.Stderr = stderr
-
-	if err = cmd.Run(); err == nil {
-		call.Audio = stdout.Bytes()
-		call.AudioType = "audio/mp4"
-
-		switch v := call.AudioName.(type) {
-		case string:
-			call.AudioName = fmt.Sprintf("%v.m4a", strings.TrimSuffix(v, path.Ext((v))))
-		}
-
-	} else {
-		fmt.Println(stderr.String())
-	}
-}
-
 func (controller *Controller) EmitCall(call *Call) {
-	for client := range controller.Clients {
-		if (!controller.Accesses.IsRestricted() || client.Access.HasAccess(call)) && client.Livefeed.IsEnabled(call) {
-			client.Send <- &Message{Command: MessageCommandCall, Payload: call}
-		}
-	}
-
+	controller.Clients.EmitCall(call, controller.Accesses.IsRestricted())
 	controller.Downstreams.Send(controller, call)
 }
 
 func (controller *Controller) EmitConfig() {
-	restricted := controller.Accesses.IsRestricted()
-
-	for client := range controller.Clients {
-		if restricted {
-			client.Send <- &Message{Command: MessageCommandPin}
-		} else {
-			controller.SendClientConfig(client)
-		}
-	}
-
+	controller.Clients.EmitConfig(controller.Groups, controller.Options, controller.Systems, controller.Tags, controller.Accesses.IsRestricted())
 	controller.Admin.BroadcastConfig()
 }
 
@@ -179,19 +110,15 @@ func (controller *Controller) IngestCall(call *Call) {
 		talkgroup  *Talkgroup
 	)
 
-	controller.ingestMutex.Lock()
-	defer controller.ingestMutex.Unlock()
+	controller.IngestLock()
+	defer controller.IngestUnlock()
 
 	logCall := func(call *Call, level string, message string) {
-		controller.Logs.LogEvent(
-			controller.Database,
-			level,
-			fmt.Sprintf("newcall: system=%v talkgroup=%v file=%v %v", call.System, call.Talkgroup, call.AudioName, message),
-		)
+		controller.Logs.LogEvent(level, fmt.Sprintf("newcall: system=%v talkgroup=%v file=%v %v", call.System, call.Talkgroup, call.AudioName, message))
 	}
 
 	logError := func(err error) {
-		controller.Logs.LogEvent(controller.Database, LogLevelError, fmt.Sprintf("controller.ingestcall: %v", err.Error()))
+		controller.Logs.LogEvent(LogLevelError, fmt.Sprintf("controller.ingestcall: %v", err.Error()))
 	}
 
 	if system, ok = controller.Systems.GetSystem(call.System); ok {
@@ -326,12 +253,10 @@ func (controller *Controller) IngestCall(call *Call) {
 		}
 
 		switch v := call.units.(type) {
-		case Units:
-			populated = true
-			if system.Units == nil {
-				system.Units = NewUnits()
+		case *Units:
+			if v != nil {
+				populated = system.Units.Merge(v)
 			}
-			system.Units.Merge(&v)
 		}
 	}
 
@@ -362,7 +287,9 @@ func (controller *Controller) IngestCall(call *Call) {
 	}
 
 	if !controller.Options.DisableAudioConversion {
-		controller.ConvertAudio(call)
+		if err := controller.FFMpeg.Convert(call, controller.Systems, controller.Tags); err != nil {
+			controller.Logs.LogEvent(LogLevelWarn, err.Error())
+		}
 	}
 
 	if id, err = controller.Calls.WriteCall(call, controller.Database); err == nil {
@@ -383,9 +310,9 @@ func (controller *Controller) IngestCall(call *Call) {
 			}
 		}
 
-		controller.EmitCall(call)
-
 		logCall(call, LogLevelInfo, "success")
+
+		controller.EmitCall(call)
 
 	} else {
 		logError(err)
@@ -401,11 +328,7 @@ func (controller *Controller) IngestUnlock() {
 }
 
 func (controller *Controller) LogClientsCount() {
-	controller.Logs.LogEvent(
-		controller.Database,
-		LogLevelInfo,
-		fmt.Sprintf("listeners count is %v", len(controller.Clients)),
-	)
+	controller.Logs.LogEvent(LogLevelInfo, fmt.Sprintf("listeners count is %v", controller.Clients.Count()))
 }
 
 func (controller *Controller) ProcessMessage(client *Client, message *Message) error {
@@ -421,7 +344,7 @@ func (controller *Controller) ProcessMessage(client *Client, message *Message) e
 		}
 
 	} else if message.Command == MessageCommandConfig {
-		controller.SendClientConfig(client)
+		client.SendConfig(controller.Groups, controller.Options, controller.Systems, controller.Tags)
 
 	} else if message.Command == MessageCommandListCall {
 		if err := controller.ProcessMessageCommandListCall(client, message); err != nil {
@@ -510,49 +433,27 @@ func (controller *Controller) ProcessMessageCommandPin(client *Client, message *
 			if access, ok := controller.Accesses.GetAccess(code); ok {
 				client.Access = access
 			} else {
-				controller.Logs.LogEvent(
-					controller.Database,
-					LogLevelWarn,
-					fmt.Sprintf("invalid access code=\"%s\" address=\"%s\"", code, client.Conn.RemoteAddr().String()),
-				)
+				controller.Logs.LogEvent(LogLevelWarn, fmt.Sprintf("invalid access code=\"%s\" address=\"%s\"", code, client.GetRemoteAddr()))
 				client.Send <- &Message{Command: MessageCommandPin}
 				return nil
 			}
 
 			if client.AuthCount == maxAuthCount {
-				controller.Logs.LogEvent(
-					controller.Database,
-					LogLevelWarn,
-					fmt.Sprintf("access ident=\"%s\" locked", client.Access.Ident),
-				)
+				controller.Logs.LogEvent(LogLevelWarn, fmt.Sprintf("access ident=\"%s\" locked", client.Access.Ident))
 				client.Send <- &Message{Command: MessageCommandPin}
 				return nil
 			}
 
 			if client.Access.HasExpired() {
-				controller.Logs.LogEvent(
-					controller.Database,
-					LogLevelWarn,
-					fmt.Sprintf("access ident=\"%s\" expired", client.Access.Ident),
-				)
+				controller.Logs.LogEvent(LogLevelWarn, fmt.Sprintf("access ident=\"%s\" expired", client.Access.Ident))
 				client.Send <- &Message{Command: MessageCommandExpired}
 				return nil
 			}
 
 			switch v := client.Access.Limit.(type) {
 			case uint:
-				count := uint(0)
-				for c := range controller.Clients {
-					if c.Access == client.Access {
-						count++
-					}
-				}
-				if count > v {
-					controller.Logs.LogEvent(
-						controller.Database,
-						LogLevelWarn,
-						fmt.Sprintf("access ident=\"%s\" too many concurrent connections, limit is %d", client.Access.Ident, client.Access.Limit),
-					)
+				if controller.Clients.AccessCount(client) > int(v) {
+					controller.Logs.LogEvent(LogLevelWarn, fmt.Sprintf("access ident=\"%s\" too many concurrent connections, limit is %d", client.Access.Ident, client.Access.Limit))
 					client.Send <- &Message{Command: MessageCommandMax}
 					return nil
 				}
@@ -561,28 +462,10 @@ func (controller *Controller) ProcessMessageCommandPin(client *Client, message *
 
 		client.AuthCount = 0
 
-		controller.SendClientConfig(client)
+		client.SendConfig(controller.Groups, controller.Options, controller.Systems, controller.Tags)
 	}
 
 	return nil
-}
-
-func (controller *Controller) SendClientConfig(client *Client) {
-	client.SystemsMap = *controller.Systems.GetScopedSystems(client, controller.Groups, controller.Tags, controller.Options.SortTalkgroups)
-	client.GroupsMap = *controller.Groups.GetGroupsMap(&client.SystemsMap)
-	client.TagsMap = *controller.Tags.GetTagsMap(&client.SystemsMap)
-
-	client.Send <- &Message{
-		Command: MessageCommandConfig,
-		Payload: map[string]interface{}{
-			"dimmerDelay": controller.Options.DimmerDelay,
-			"groups":      client.GroupsMap,
-			"keypadBeeps": GetKeypadBeeps(controller.Options),
-			"systems":     client.SystemsMap,
-			"tags":        client.TagsMap,
-			"tagsToggle":  controller.Options.TagsToggle,
-		},
-	}
 }
 
 func (controller *Controller) Start() error {
@@ -594,7 +477,7 @@ func (controller *Controller) Start() error {
 		controller.running = true
 	}
 
-	controller.Logs.LogEvent(controller.Database, LogLevelWarn, "server started")
+	controller.Logs.LogEvent(LogLevelWarn, "server started")
 
 	if len(controller.Config.BaseDir) > 0 {
 		log.Printf("base folder is %s\n", controller.Config.BaseDir)
@@ -632,46 +515,45 @@ func (controller *Controller) Start() error {
 		return err
 	}
 
-	cmd := exec.Command("ffmpeg", "-version")
-	if err := cmd.Run(); err == nil {
-		controller.ffmpeg = true
-
-	} else {
-		controller.ffmpeg = false
-	}
-
 	go func() {
-		c := make(chan os.Signal, 1)
+		c := make(chan os.Signal)
 		signal.Notify(c, os.Interrupt)
 		<-c
 		controller.Terminate()
 	}()
 
 	go func() {
+		for {
+			call := <-controller.Ingest
+			controller.IngestCall(call)
+		}
+	}()
+
+	go func() {
 		var timer *time.Timer
 
-		logClientsCount := func() {
+		doClientsCount := func() {
 			if timer != nil {
 				timer.Stop()
 			}
-			timer = time.AfterFunc(time.Second, controller.LogClientsCount)
+			timer = time.AfterFunc(time.Second, func() {
+				controller.LogClientsCount()
+
+				if controller.Options.ShowListenersCount {
+					controller.Clients.EmitListenersCount()
+				}
+			})
 		}
 
 		for {
 			select {
-			case call := <-controller.Ingest:
-				controller.IngestCall(call)
-
 			case client := <-controller.Register:
-				controller.Clients[client] = true
-				logClientsCount()
+				controller.Clients.Add(client)
+				doClientsCount()
 
 			case client := <-controller.Unregister:
-				if _, ok := controller.Clients[client]; ok {
-					delete(controller.Clients, client)
-					close(client.Send)
-					logClientsCount()
-				}
+				controller.Clients.Remove(client)
+				doClientsCount()
 			}
 		}
 	}()
@@ -683,10 +565,6 @@ func (controller *Controller) Start() error {
 
 func (controller *Controller) Terminate() {
 	controller.Dirwatches.Stop()
-
-	for c := range controller.Clients {
-		c.Conn.Close()
-	}
 
 	if err := controller.Database.Sql.Close(); err != nil {
 		log.Println(err)

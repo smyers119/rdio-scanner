@@ -9,6 +9,9 @@
         <div *ngIf="!linked">
             <span>NO LINK</span>
         </div>
+        <div *ngIf="linked && showListenersCount">
+            <span>L: {{ listeners }}</span>
+        </div>
         <div>
             <span>Q: {{ callQueue }}</span>
         </div>
@@ -90,7 +93,8 @@
                 </tr>
             </thead>
             <tbody>
-                <tr *ngFor="let previousCall of callHistory">
+                <tr *ngFor="let previousCall of callHistory"
+                    [ngClass]="{ 'replaying': previousCall?.id !== null && previousCall?.id === call?.id} ">
                     <td>
                         <span>{{ previousCall?.dateTime | date:'HH:mm' }}</span>
                     </td>

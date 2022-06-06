@@ -28,7 +28,7 @@ type Group struct {
 	Label string      `json:"label"`
 }
 
-func (group *Group) FromMap(m map[string]interface{}) {
+func (group *Group) FromMap(m map[string]interface{}) *Group {
 	switch v := m["_id"].(type) {
 	case float64:
 		group.Id = uint(v)
@@ -38,6 +38,8 @@ func (group *Group) FromMap(m map[string]interface{}) {
 	case string:
 		group.Label = v
 	}
+
+	return group
 }
 
 type Groups struct {
@@ -52,7 +54,7 @@ func NewGroups() *Groups {
 	}
 }
 
-func (groups *Groups) FromMap(f []interface{}) {
+func (groups *Groups) FromMap(f []interface{}) *Groups {
 	groups.mutex.Lock()
 	defer groups.mutex.Unlock()
 
@@ -66,6 +68,8 @@ func (groups *Groups) FromMap(f []interface{}) {
 			groups.List = append(groups.List, group)
 		}
 	}
+
+	return groups
 }
 
 func (groups *Groups) GetGroup(f interface{}) (group *Group, ok bool) {
@@ -90,7 +94,7 @@ func (groups *Groups) GetGroup(f interface{}) (group *Group, ok bool) {
 	return nil, false
 }
 
-func (groups *Groups) GetGroupsMap(systemsMap *SystemsMap) *GroupsMap {
+func (groups *Groups) GetGroupsMap(systemsMap *SystemsMap) GroupsMap {
 	var groupsMap = GroupsMap{}
 
 	for _, system := range *systemsMap {
@@ -155,7 +159,7 @@ func (groups *Groups) GetGroupsMap(systemsMap *SystemsMap) *GroupsMap {
 		}
 	}
 
-	return &groupsMap
+	return groupsMap
 }
 
 func (groups *Groups) Read(db *Database) error {

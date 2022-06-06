@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -56,18 +57,17 @@ func NewAdmin(controller *Controller) *Admin {
 		Attempts:         AdminLoginAttempts{},
 		AttemptsMax:      uint(3),
 		AttemptsMaxDelay: time.Duration(time.Duration.Minutes(10)),
-		Broadcast:        make(chan *[]byte, 100),
+		Broadcast:        make(chan *[]byte),
 		Conns:            make(map[*websocket.Conn]bool),
 		Controller:       controller,
-		Register:         make(chan *websocket.Conn, 100),
+		Register:         make(chan *websocket.Conn),
 		Tokens:           []string{},
-		Unregister:       make(chan *websocket.Conn, 100),
+		Unregister:       make(chan *websocket.Conn),
 		mutex:            sync.Mutex{},
 	}
 }
 
 func (admin *Admin) BroadcastConfig() {
-
 	if b, err := json.Marshal(admin.GetConfig()); err == nil {
 		for conn := range admin.Conns {
 			conn.WriteMessage(websocket.TextMessage, b)
@@ -75,7 +75,7 @@ func (admin *Admin) BroadcastConfig() {
 	}
 }
 
-func (admin *Admin) ChangePassword(currentPassword string, newPassword string) error {
+func (admin *Admin) ChangePassword(currentPassword interface{}, newPassword string) error {
 	var (
 		err  error
 		hash []byte
@@ -85,8 +85,11 @@ func (admin *Admin) ChangePassword(currentPassword string, newPassword string) e
 		return errors.New("newPassword is empty")
 	}
 
-	if err = bcrypt.CompareHashAndPassword([]byte(admin.Controller.Options.adminPassword), []byte(currentPassword)); err != nil {
-		return err
+	switch v := currentPassword.(type) {
+	case string:
+		if err = bcrypt.CompareHashAndPassword([]byte(admin.Controller.Options.adminPassword), []byte(v)); err != nil {
+			return err
+		}
 	}
 
 	if hash, err = bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost); err != nil {
@@ -104,7 +107,7 @@ func (admin *Admin) ChangePassword(currentPassword string, newPassword string) e
 		return err
 	}
 
-	admin.Controller.Logs.LogEvent(admin.Controller.Database, LogLevelWarn, "admin password changed.")
+	admin.Controller.Logs.LogEvent(LogLevelWarn, "admin password changed.")
 
 	return nil
 }
@@ -140,13 +143,8 @@ func (admin *Admin) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}()
 
 	} else {
-		admin.Controller.IngestLock()
-		admin.mutex.Lock()
-		defer admin.mutex.Unlock()
-		defer admin.Controller.IngestUnlock()
-
 		logError := func(err error) {
-			admin.Controller.Logs.LogEvent(admin.Controller.Database, LogLevelError, fmt.Sprintf("admin.confighandler.put: %s", err.Error()))
+			admin.Controller.Logs.LogEvent(LogLevelError, fmt.Sprintf("admin.confighandler.put: %s", err.Error()))
 		}
 
 		t := admin.GetAuthorization(r)
@@ -166,6 +164,11 @@ func (admin *Admin) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+
+			admin.Controller.IngestLock()
+			admin.mutex.Lock()
+
+			admin.Controller.Dirwatches.Stop()
 
 			switch v := m["access"].(type) {
 			case []interface{}:
@@ -274,12 +277,15 @@ func (admin *Admin) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			admin.mutex.Unlock()
+			admin.Controller.IngestUnlock()
+
 			admin.Controller.EmitConfig()
 			admin.Controller.Dirwatches.Start(admin.Controller)
 
 			admin.SendConfig(w)
 
-			admin.Controller.Logs.LogEvent(admin.Controller.Database, LogLevelWarn, "configuration changed")
+			admin.Controller.Logs.LogEvent(LogLevelWarn, "configuration changed")
 
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -344,13 +350,14 @@ func (admin *Admin) LogsHandler(w http.ResponseWriter, r *http.Request) {
 
 		r, err := admin.Controller.Logs.Search(&logOptions, admin.Controller.Database)
 		if err != nil {
-			fmt.Println(err)
+			admin.Controller.Logs.LogEvent(LogLevelError, err.Error())
 			w.WriteHeader(http.StatusExpectationFailed)
 			return
 		}
 
 		b, err := json.Marshal(r)
 		if err != nil {
+			admin.Controller.Logs.LogEvent(LogLevelError, err.Error())
 			w.WriteHeader(http.StatusExpectationFailed)
 			return
 		}
@@ -366,20 +373,22 @@ func (admin *Admin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		m := map[string]interface{}{}
-		err := json.NewDecoder(r.Body).Decode(&m)
-		if err != nil {
+
+		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		attempt := admin.Attempts[r.RemoteAddr]
+		remoteAddr := GetRemoteAddr(r)
+
+		attempt := admin.Attempts[remoteAddr]
 
 		if attempt == nil {
-			admin.Attempts[r.RemoteAddr] = &AdminLoginAttempt{
+			admin.Attempts[remoteAddr] = &AdminLoginAttempt{
 				Count: 1,
 				Date:  time.Now(),
 			}
-			attempt = admin.Attempts[r.RemoteAddr]
+			attempt = admin.Attempts[remoteAddr]
 		} else {
 			attempt.Count++
 			attempt.Date = time.Now()
@@ -387,11 +396,7 @@ func (admin *Admin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 		if attempt.Count > admin.AttemptsMax || time.Since(attempt.Date) < admin.AttemptsMaxDelay {
 			if attempt.Count == admin.AttemptsMax+1 {
-				admin.Controller.Logs.LogEvent(
-					admin.Controller.Database,
-					LogLevelWarn,
-					fmt.Sprintf("too many login attempts for ip=\"%v\"", r.RemoteAddr),
-				)
+				admin.Controller.Logs.LogEvent(LogLevelWarn, fmt.Sprintf("too many login attempts for ip=\"%v\"", remoteAddr))
 			}
 
 			w.WriteHeader(http.StatusUnauthorized)
@@ -410,16 +415,19 @@ func (admin *Admin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !ok {
-			admin.Controller.Logs.LogEvent(
-				admin.Controller.Database,
-				LogLevelWarn,
-				fmt.Sprintf("invalid login attempt for ip=%v", r.RemoteAddr),
-			)
+			admin.Controller.Logs.LogEvent(LogLevelWarn, fmt.Sprintf("invalid login attempt for ip=%v", remoteAddr))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
-		token := jwt.New(jwt.SigningMethodHS256)
+		id, err := uuid.NewRandom()
+
+		if err != nil {
+			w.WriteHeader(http.StatusExpectationFailed)
+			return
+		}
+
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{ID: id.String()})
 		sToken, err := token.SignedString([]byte(admin.Controller.Options.secret))
 
 		if err != nil {
@@ -468,6 +476,8 @@ func (admin *Admin) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 				admin.Tokens = append(admin.Tokens[:k], admin.Tokens[k+1:]...)
 			}
 		}
+		w.WriteHeader(http.StatusOK)
+
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -478,12 +488,12 @@ func (admin *Admin) PasswordHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var (
 			b               []byte
-			currentPassword string
+			currentPassword interface{}
 			newPassword     string
 		)
 
 		logError := func(err error) {
-			admin.Controller.Logs.LogEvent(admin.Controller.Database, LogLevelError, fmt.Sprintf("admin.passwordhandler.post: %s", err.Error()))
+			admin.Controller.Logs.LogEvent(LogLevelError, fmt.Sprintf("admin.passwordhandler.post: %s", err.Error()))
 		}
 
 		t := admin.GetAuthorization(r)
@@ -502,9 +512,6 @@ func (admin *Admin) PasswordHandler(w http.ResponseWriter, r *http.Request) {
 		switch v := m["currentPassword"].(type) {
 		case string:
 			currentPassword = v
-		default:
-			w.WriteHeader(http.StatusBadRequest)
-			return
 		}
 
 		switch v := m["newPassword"].(type) {
@@ -516,14 +523,12 @@ func (admin *Admin) PasswordHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err = admin.ChangePassword(currentPassword, newPassword); err != nil {
-			logError(err)
+			logError(errors.New("unable to change admin password, current password is invalid"))
 			w.WriteHeader(http.StatusExpectationFailed)
 			return
 		}
 
-		if b, err = json.Marshal(map[string]interface{}{
-			"passwordNeedChange": admin.Controller.Options.adminPasswordNeedChange,
-		}); err == nil {
+		if b, err = json.Marshal(map[string]interface{}{"passwordNeedChange": admin.Controller.Options.adminPasswordNeedChange}); err == nil {
 			w.Write(b)
 		} else {
 			w.WriteHeader(http.StatusExpectationFailed)
@@ -591,6 +596,86 @@ func (admin *Admin) Start() error {
 	}()
 
 	return nil
+}
+
+func (admin *Admin) UserAddHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		logError := func(err error) {
+			admin.Controller.Logs.LogEvent(LogLevelError, fmt.Sprintf("admin.useraddhandler.post: %s", err.Error()))
+		}
+
+		t := admin.GetAuthorization(r)
+		if !admin.ValidateToken(t) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		m := map[string]interface{}{}
+		err := json.NewDecoder(r.Body).Decode(&m)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		admin.Controller.Accesses.Add(NewAccess().FromMap(m))
+
+		if err := admin.Controller.Accesses.Write(admin.Controller.Database); err == nil {
+			if err := admin.Controller.Accesses.Read(admin.Controller.Database); err == nil {
+				admin.BroadcastConfig()
+				w.WriteHeader(http.StatusOK)
+			} else {
+				logError(err)
+				w.WriteHeader(http.StatusExpectationFailed)
+			}
+		} else {
+			logError(err)
+			w.WriteHeader(http.StatusExpectationFailed)
+		}
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (admin *Admin) UserRemoveHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		logError := func(err error) {
+			admin.Controller.Logs.LogEvent(LogLevelError, fmt.Sprintf("admin.userremovehandler.post: %s", err.Error()))
+		}
+
+		t := admin.GetAuthorization(r)
+		if !admin.ValidateToken(t) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		m := map[string]interface{}{}
+		err := json.NewDecoder(r.Body).Decode(&m)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if _, ok := admin.Controller.Accesses.Remove(NewAccess().FromMap(m)); ok {
+			if err := admin.Controller.Accesses.Write(admin.Controller.Database); err == nil {
+				if err := admin.Controller.Accesses.Read(admin.Controller.Database); err == nil {
+					admin.BroadcastConfig()
+					w.WriteHeader(http.StatusOK)
+				} else {
+					logError(err)
+					w.WriteHeader(http.StatusExpectationFailed)
+				}
+			} else {
+				logError(err)
+				w.WriteHeader(http.StatusExpectationFailed)
+			}
+		}
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (admin *Admin) ValidateToken(sToken string) bool {
